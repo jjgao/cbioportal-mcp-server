@@ -1,369 +1,4 @@
-private async getPatients(args: any) {
-    const { studyId, pageSize = 100 } = args;
-    
-    const response = await this.axiosInstance.get(`/studies/${studyId}/patients`, {
-      params: { pageSize, projection: 'SUMMARY' }
-    });
-    
-    const patients = response.data.slice(0, pageSize);
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Found ${response.data.length} patients in study ${studyId}:\n\n${patients
-            .map((patient: Patient) => 
-              `• ${patient.stableId}`
-            )
-            .join('\n')}`,
-        },
-      ],
-    };
-  }
-
-  private async getSampleLists(args: any) {
-    const { studyId } = args;
-    
-    const response = await this.axiosInstance.get(`/studies/${studyId}/sample-lists`);
-    const sampleLists = response.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Sample lists for study ${studyId}:\n\n${sampleLists
-            .map((list: SampleList) => 
-              `• **${list.name}**\n  ID: ${list.stableId}\n  Category: ${list.category}\n  Sample Count: ${list.sampleCount}\n  Description: ${list.description}`
-            )
-            .join('\n\n')}`,
-        },
-      ],
-    };
-  }
-
-  private async getCopyNumberAlterations(args: any) {
-    const { studyId, geneSymbols, alterationType = 'HOMDEL_AND_AMP' } = args;
-    
-    // Get the CNA molecular profile for this study
-    const profilesResponse = await this.axiosInstance.get(`/studies/${studyId}/molecular-profiles`);
-    const cnaProfile = profilesResponse.data.find(
-      (profile: MolecularProfile) => profile.molecularAlterationType === 'COPY_NUMBER_ALTERATION'
-    );
-    
-    if (!cnaProfile) {
-      throw new Error(`No copy number alteration data available for study ${studyId}`);
-    }
-
-    // Get gene information
-    const genesResponse = await this.axiosInstance.post('/genes/fetch', geneSymbols, {
-      params: { geneIdType: 'HUGO_GENE_SYMBOL' }
-    });
-    
-    const genes = genesResponse.data;
-    const entrezGeneIds = genes.map((gene: any) => gene.entrezGeneId);
-
-    // Fetch copy number alterations
-    const cnaData = {
-      entrezGeneIds,
-      discreteCopyNumberEventType: alterationType,
-    };
-
-    const cnaResponse = await this.axiosInstance.post(
-      `/molecular-profiles/${cnaProfile.molecularProfileId}/discrete-copy-number/fetch`,
-      cnaData
-    );
-    
-    const cnas = cnaResponse.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Found ${cnas.length} copy number alterations in ${geneSymbols.join(', ')} for study ${studyId}:\n\n${cnas
-            .slice(0, 50)
-            .map((cna: any) => 
-              `• **${cna.gene?.hugoGeneSymbol || 'Unknown'}** in ${cna.sampleId} (${cna.patientId})\n  Alteration: ${cna.alteration === -2 ? 'Deep Deletion' : cna.alteration === 2 ? 'Amplification' : cna.alteration === 1 ? 'Gain' : cna.alteration === -1 ? 'Shallow Deletion' : cna.alteration}`
-            )
-            .join('\n\n')}${cnas.length > 50 ? '\n\n... and more alterations' : ''}`,
-        },
-      ],
-    };
-  }
-
-  private async getMolecularData(args: any) {
-    const { studyId, geneSymbols, molecularProfileType } = args;
-    
-    // Get molecular profiles for this study
-    const profilesResponse = await this.axiosInstance.get(`/studies/${studyId}/molecular-profiles`);
-    let targetProfile = profilesResponse.data[0]; // default to first profile
-    
-    if (molecularProfileType) {
-      targetProfile = profilesResponse.data.find(
-        (profile: MolecularProfile) => profile.datatype.toLowerCase().includes(molecularProfileType.toLowerCase()) ||
-        profile.stableId.toLowerCase().includes(molecularProfileType.toLowerCase())
-      ) || targetProfile;
-    }
-    
-    if (!targetProfile) {
-      throw new Error(`No molecular profiles available for study ${studyId}`);
-    }
-
-    // Get gene information
-    const genesResponse = await this.axiosInstance.post('/genes/fetch', geneSymbols, {
-      params: { geneIdType: 'HUGO_GENE_SYMBOL' }
-    });
-    
-    const genes = genesResponse.data;
-    const entrezGeneIds = genes.map((gene: any) => gene.entrezGeneId);
-
-    // Fetch molecular data
-    const molecularData = {
-      entrezGeneIds,
-    };
-
-    const dataResponse = await this.axiosInstance.post(
-      `/molecular-profiles/${targetProfile.molecularProfileId}/molecular-data/fetch`,
-      molecularData
-    );
-    
-    const data = dataResponse.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Molecular data for ${geneSymbols.join(', ')} in study ${studyId} (${targetProfile.name}):\n\n${data
-            .slice(0, 50)
-            .map((item: any) => 
-              `• **${item.gene?.hugoGeneSymbol || 'Unknown'}** in ${item.sampleId} (${item.patientId})\n  Value: ${item.value}`
-            )
-            .join('\n\n')}${data.length > 50 ? '\n\n... and more data points' : ''}`,
-        },
-      ],
-    };
-  }
-
-  private async getClinicalAttributes(args: any) {
-    const { studyId } = args;
-    
-    const response = await this.axiosInstance.get(`/studies/${studyId}/clinical-attributes`);
-    const attributes = response.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Clinical attributes for study ${studyId}:\n\n${attributes
-            .map((attr: ClinicalAttribute) => 
-              `• **${attr.displayName}** (${attr.attrId})\n  Type: ${attr.datatype}\n  Level: ${attr.patientAttribute ? 'Patient' : 'Sample'}\n  Description: ${attr.description || 'N/A'}`
-            )
-            .join('\n\n')}`,
-        },
-      ],
-    };
-  }
-
-  private async searchGenes(args: any) {
-    const { keyword, pageSize = 20 } = args;
-    
-    const response = await this.axiosInstance.get('/genes', {
-      params: { 
-        keyword, 
-        pageSize,
-        projection: 'SUMMARY'
-      }
-    });
-    
-    const genes = response.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Found ${genes.length} genes matching "${keyword}":\n\n${genes
-            .map((gene: Gene) => 
-              `• **${gene.hugoGeneSymbol}** (Entrez ID: ${gene.entrezGeneId})\n  Type: ${gene.type}`
-            )
-            .join('\n\n')}`,
-        },
-      ],
-    };
-  }
-
-  private async getGenePanels(args: any) {
-    const { studyId } = args;
-    
-    let response;
-    if (studyId) {
-      // Get gene panels for specific study (if available)
-      try {
-        const profilesResponse = await this.axiosInstance.get(`/studies/${studyId}/molecular-profiles`);
-        response = await this.axiosInstance.get('/gene-panels', { params: { pageSize: 100 } });
-      } catch (error) {
-        response = await this.axiosInstance.get('/gene-panels', { params: { pageSize: 100 } });
-      }
-    } else {
-      response = await this.axiosInstance.get('/gene-panels', { params: { pageSize: 100 } });
-    }
-    
-    const genePanels = response.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Gene panels${studyId ? ` for study ${studyId}` : ''}:\n\n${genePanels
-            .slice(0, 20)
-            .map((panel: any) => 
-              `• **${panel.stableId}**\n  Description: ${panel.description || 'N/A'}\n  Genes: ${panel.genes?.length || 0} genes`
-            )
-            .join('\n\n')}${genePanels.length > 20 ? '\n\n... and more panels' : ''}`,
-        },
-      ],
-    };
-  }
-
-  private async getCancerTypesTool(args: any) {
-    const response = await this.axiosInstance.get('/cancer-types');
-    const cancerTypes = response.data;
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Cancer types available in cBioPortal:\n\n${cancerTypes
-            .map((type: any) => 
-              `• **${type.name}** (${type.typeOfCancerId})\n  Short Name: ${type.shortName}\n  Color: ${type.dedicatedColor}`
-            )
-            .join('\n\n')}`,
-        },
-      ],
-    };
-  }
-
-  private async getSignificantlyMutatedGenes(args: any) {
-    const { studyId } = args;
-    
-    try {
-      const response = await this.axiosInstance.get(`/studies/${studyId}/significantly-mutated-genes`);
-      const mutSigResults = response.data;
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Significantly mutated genes (MutSig results) for study ${studyId}:\n\n${mutSigResults
-              .slice(0, 20)
-              .map((result: any) => 
-                `• **${result.hugoGeneSymbol}** (Rank: ${result.rank})\n  p-value: ${result.pValue}\n  q-value: ${result.qValue}\n  Mutations: ${result.nummutations}`
-              )
-              .join('\n\n')}${mutSigResults.length > 20 ? '\n\n... and more genes' : ''}`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `No MutSig results available for study ${studyId}. This analysis may not have been performed for this dataset.`,
-          },
-        ],
-      };
-    }
-  }
-
-  private async getSurvivalData(args: any) {
-    const { studyId, attributeIdPrefix = 'OS' } = args;
-    
-    try {
-      // Get patients for the study first
-      const patientsResponse = await this.axiosInstance.get(`/studies/${studyId}/patients`);
-      const patients = patientsResponse.data;
-      
-      const patientIdentifiers = patients.map((patient: Patient) => ({
-        patientId: patient.stableId,
-        studyId: studyId
-      }));
-
-      const survivalRequest = {
-        patientIdentifiers,
-        attributeIdPrefix,
-      };
-
-      const response = await this.axiosInstance.post('/survival-data/fetch', survivalRequest);
-      const survivalData = response.data;
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Survival data for study ${studyId} (${attributeIdPrefix}):\n\n${survivalData
-              .slice(0, 20)
-              .map((item: any) => 
-                `• Patient ${item.patientId}: ${item.attrValue} (${item.attrId})`
-              )
-              .join('\n')}${survivalData.length > 20 ? '\n\n... and more survival data' : ''}`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `No survival data available for study ${studyId} with prefix ${attributeIdPrefix}.`,
-          },
-        ],
-      };
-    }
-  }
-
-  private async getTreatmentData(args: any) {
-    const { studyId, level = 'PATIENT', tier = 'Agent' } = args;
-    
-    try {
-      const studyViewFilter = {
-        studyIds: [studyId]
-      };
-
-      const endpoint = level === 'PATIENT' ? '/treatments/patient' : '/treatments/sample';
-      const response = await this.axiosInstance.post(endpoint, studyViewFilter, {
-        params: { tier }
-      });
-      
-      const treatmentData = response.data;
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Treatment data for study ${studyId} (${level} level, ${tier} tier):\n\n${treatmentData
-              .slice(0, 20)
-              .map((treatment: any) => 
-                `• **${treatment.treatment}**\n  Count: ${treatment.count} ${level.toLowerCase()}s\n  ${level === 'SAMPLE' && treatment.time ? `Time: ${treatment.time}` : ''}`
-              )
-              .join('\n\n')}${treatmentData.length > 20 ? '\n\n... and more treatments' : ''}`,
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `No treatment data available for study ${studyId} at ${level} level.`,
-          },
-        ],
-      };
-    }
-  }
-
-  private async getPatients(args: any) {
-    const { studyId, pageSize = 100 } = args;
-    
-    const response = await this.axiosInstance.get(`/studies/${studyId}/patients`, {
-      params: { pageSize,import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
@@ -373,7 +8,7 @@ import {
   McpError,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import axios from "axios";
+import axios, { AxiosInstance } from "axios";
 
 // Configuration for cBioPortal API
 const CBIOPORTAL_BASE_URL = "https://www.cbioportal.org/api";
@@ -397,6 +32,19 @@ interface Sample {
   sampleType: string;
 }
 
+interface Patient {
+  stableId: string;
+  cancerStudyIdentifier: string;
+}
+
+interface SampleList {
+  stableId: string;
+  name: string;
+  category: string;
+  sampleCount: number;
+  description: string;
+}
+
 interface MolecularProfile {
   molecularProfileId: string;
   studyId: string;
@@ -414,6 +62,20 @@ interface ClinicalData {
   attrValue: string;
 }
 
+interface ClinicalAttribute {
+  attrId: string;
+  displayName: string;
+  description: string;
+  datatype: string;
+  patientAttribute: boolean;
+}
+
+interface Gene {
+  entrezGeneId: number;
+  hugoGeneSymbol: string;
+  type: string;
+}
+
 interface Mutation {
   entrezGeneId: number;
   hugoGeneSymbol: string;
@@ -426,7 +88,7 @@ interface Mutation {
 
 class CBioPortalMCPServer {
   private server: Server;
-  private axiosInstance: axios.AxiosInstance;
+  private axiosInstance: AxiosInstance;
 
   constructor() {
     this.server = new Server(
@@ -857,7 +519,6 @@ class CBioPortalMCPServer {
             };
 
           case "cbioportal://genes":
-            // Return a sample of genes for browsing
             const genes = await this.getGenesSample();
             return {
               contents: [
@@ -1119,6 +780,49 @@ class CBioPortalMCPServer {
     };
   }
 
+  private async getPatients(args: any) {
+    const { studyId, pageSize = 100 } = args;
+    
+    const response = await this.axiosInstance.get(`/studies/${studyId}/patients`, {
+      params: { pageSize, projection: 'SUMMARY' }
+    });
+    
+    const patients = response.data.slice(0, pageSize);
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Found ${response.data.length} patients in study ${studyId}:\n\n${patients
+            .map((patient: Patient) => 
+              `• ${patient.stableId}`
+            )
+            .join('\n')}`,
+        },
+      ],
+    };
+  }
+
+  private async getSampleLists(args: any) {
+    const { studyId } = args;
+    
+    const response = await this.axiosInstance.get(`/studies/${studyId}/sample-lists`);
+    const sampleLists = response.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Sample lists for study ${studyId}:\n\n${sampleLists
+            .map((list: SampleList) => 
+              `• **${list.name}**\n  ID: ${list.stableId}\n  Category: ${list.category}\n  Sample Count: ${list.sampleCount}\n  Description: ${list.description}`
+            )
+            .join('\n\n')}`,
+        },
+      ],
+    };
+  }
+
   private async getMolecularProfiles(args: any) {
     const { studyId } = args;
     
@@ -1163,7 +867,6 @@ class CBioPortalMCPServer {
     // Fetch mutations
     const mutationData = {
       entrezGeneIds,
-      molecularProfileId: mutationProfile.molecularProfileId,
       ...(sampleIds && { sampleIds }),
     };
 
@@ -1179,11 +882,113 @@ class CBioPortalMCPServer {
         {
           type: "text",
           text: `Found ${mutations.length} mutations in ${geneSymbols.join(', ')} for study ${studyId}:\n\n${mutations
-            .slice(0, 50) // Limit to first 50 for readability
+            .slice(0, 50)
             .map((mut: Mutation) => 
               `• **${mut.hugoGeneSymbol}** in ${mut.sampleId} (${mut.patientId})\n  Type: ${mut.mutationType}\n  Change: ${mut.proteinChange || mut.aminoAcidChange || 'N/A'}`
             )
             .join('\n\n')}${mutations.length > 50 ? '\n\n... and more mutations' : ''}`,
+        },
+      ],
+    };
+  }
+
+  private async getCopyNumberAlterations(args: any) {
+    const { studyId, geneSymbols, alterationType = 'HOMDEL_AND_AMP' } = args;
+    
+    // Get the CNA molecular profile for this study
+    const profilesResponse = await this.axiosInstance.get(`/studies/${studyId}/molecular-profiles`);
+    const cnaProfile = profilesResponse.data.find(
+      (profile: MolecularProfile) => profile.molecularAlterationType === 'COPY_NUMBER_ALTERATION'
+    );
+    
+    if (!cnaProfile) {
+      throw new Error(`No copy number alteration data available for study ${studyId}`);
+    }
+
+    // Get gene information
+    const genesResponse = await this.axiosInstance.post('/genes/fetch', geneSymbols, {
+      params: { geneIdType: 'HUGO_GENE_SYMBOL' }
+    });
+    
+    const genes = genesResponse.data;
+    const entrezGeneIds = genes.map((gene: any) => gene.entrezGeneId);
+
+    // Fetch copy number alterations
+    const cnaData = {
+      entrezGeneIds,
+      discreteCopyNumberEventType: alterationType,
+    };
+
+    const cnaResponse = await this.axiosInstance.post(
+      `/molecular-profiles/${cnaProfile.molecularProfileId}/discrete-copy-number/fetch`,
+      cnaData
+    );
+    
+    const cnas = cnaResponse.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Found ${cnas.length} copy number alterations in ${geneSymbols.join(', ')} for study ${studyId}:\n\n${cnas
+            .slice(0, 50)
+            .map((cna: any) => 
+              `• **${cna.gene?.hugoGeneSymbol || 'Unknown'}** in ${cna.sampleId} (${cna.patientId})\n  Alteration: ${cna.alteration === -2 ? 'Deep Deletion' : cna.alteration === 2 ? 'Amplification' : cna.alteration === 1 ? 'Gain' : cna.alteration === -1 ? 'Shallow Deletion' : cna.alteration}`
+            )
+            .join('\n\n')}${cnas.length > 50 ? '\n\n... and more alterations' : ''}`,
+        },
+      ],
+    };
+  }
+
+  private async getMolecularData(args: any) {
+    const { studyId, geneSymbols, molecularProfileType } = args;
+    
+    // Get molecular profiles for this study
+    const profilesResponse = await this.axiosInstance.get(`/studies/${studyId}/molecular-profiles`);
+    let targetProfile = profilesResponse.data[0]; // default to first profile
+    
+    if (molecularProfileType) {
+      targetProfile = profilesResponse.data.find(
+        (profile: MolecularProfile) => profile.datatype.toLowerCase().includes(molecularProfileType.toLowerCase()) ||
+        profile.molecularProfileId.toLowerCase().includes(molecularProfileType.toLowerCase())
+      ) || targetProfile;
+    }
+    
+    if (!targetProfile) {
+      throw new Error(`No molecular profiles available for study ${studyId}`);
+    }
+
+    // Get gene information
+    const genesResponse = await this.axiosInstance.post('/genes/fetch', geneSymbols, {
+      params: { geneIdType: 'HUGO_GENE_SYMBOL' }
+    });
+    
+    const genes = genesResponse.data;
+    const entrezGeneIds = genes.map((gene: any) => gene.entrezGeneId);
+
+    // Fetch molecular data
+    const molecularData = {
+      entrezGeneIds,
+    };
+
+    const dataResponse = await this.axiosInstance.post(
+      `/molecular-profiles/${targetProfile.molecularProfileId}/molecular-data/fetch`,
+      molecularData
+    );
+    
+    const data = dataResponse.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Molecular data for ${geneSymbols.join(', ')} in study ${studyId} (${targetProfile.name}):\n\n${data
+            .slice(0, 50)
+            .map((item: any) => 
+              `• **${item.gene?.hugoGeneSymbol || 'Unknown'}** in ${item.sampleId} (${item.patientId})\n  Value: ${item.value}`
+            )
+            .join('\n\n')}${data.length > 50 ? '\n\n... and more data points' : ''}`,
         },
       ],
     };
@@ -1228,6 +1033,213 @@ class CBioPortalMCPServer {
         },
       ],
     };
+  }
+
+  private async getClinicalAttributes(args: any) {
+    const { studyId } = args;
+    
+    const response = await this.axiosInstance.get(`/studies/${studyId}/clinical-attributes`);
+    const attributes = response.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Clinical attributes for study ${studyId}:\n\n${attributes
+            .map((attr: ClinicalAttribute) => 
+              `• **${attr.displayName}** (${attr.attrId})\n  Type: ${attr.datatype}\n  Level: ${attr.patientAttribute ? 'Patient' : 'Sample'}\n  Description: ${attr.description || 'N/A'}`
+            )
+            .join('\n\n')}`,
+        },
+      ],
+    };
+  }
+
+  private async searchGenes(args: any) {
+    const { keyword, pageSize = 20 } = args;
+    
+    const response = await this.axiosInstance.get('/genes', {
+      params: { 
+        keyword, 
+        pageSize,
+        projection: 'SUMMARY'
+      }
+    });
+    
+    const genes = response.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Found ${genes.length} genes matching "${keyword}":\n\n${genes
+            .map((gene: Gene) => 
+              `• **${gene.hugoGeneSymbol}** (Entrez ID: ${gene.entrezGeneId})\n  Type: ${gene.type}`
+            )
+            .join('\n\n')}`,
+        },
+      ],
+    };
+  }
+
+  private async getGenePanels(args: any) {
+    const { studyId } = args;
+    
+    const response = await this.axiosInstance.get('/gene-panels', { 
+      params: { pageSize: 100 } 
+    });
+    
+    const genePanels = response.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Gene panels${studyId ? ` for study ${studyId}` : ''}:\n\n${genePanels
+            .slice(0, 20)
+            .map((panel: any) => 
+              `• **${panel.stableId}**\n  Description: ${panel.description || 'N/A'}\n  Genes: ${panel.genes?.length || 0} genes`
+            )
+            .join('\n\n')}${genePanels.length > 20 ? '\n\n... and more panels' : ''}`,
+        },
+      ],
+    };
+  }
+
+  private async getCancerTypesTool(args: any) {
+    const response = await this.axiosInstance.get('/cancer-types');
+    const cancerTypes = response.data;
+    
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Cancer types available in cBioPortal:\n\n${cancerTypes
+            .map((type: any) => 
+              `• **${type.name}** (${type.typeOfCancerId})\n  Short Name: ${type.shortName}\n  Color: ${type.dedicatedColor}`
+            )
+            .join('\n\n')}`,
+        },
+      ],
+    };
+  }
+
+  private async getSignificantlyMutatedGenes(args: any) {
+    const { studyId } = args;
+    
+    try {
+      const response = await this.axiosInstance.get(`/studies/${studyId}/significantly-mutated-genes`);
+      const mutSigResults = response.data;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Significantly mutated genes (MutSig results) for study ${studyId}:\n\n${mutSigResults
+              .slice(0, 20)
+              .map((result: any) => 
+                `• **${result.hugoGeneSymbol}** (Rank: ${result.rank})\n  p-value: ${result.pValue}\n  q-value: ${result.qValue}\n  Mutations: ${result.nummutations}`
+              )
+              .join('\n\n')}${mutSigResults.length > 20 ? '\n\n... and more genes' : ''}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No MutSig results available for study ${studyId}. This analysis may not have been performed for this dataset.`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async getSurvivalData(args: any) {
+    const { studyId, attributeIdPrefix = 'OS' } = args;
+    
+    try {
+      // Get patients for the study first
+      const patientsResponse = await this.axiosInstance.get(`/studies/${studyId}/patients`);
+      const patients = patientsResponse.data;
+      
+      const patientIdentifiers = patients.map((patient: Patient) => ({
+        patientId: patient.stableId,
+        studyId: studyId
+      }));
+
+      const survivalRequest = {
+        patientIdentifiers,
+        attributeIdPrefix,
+      };
+
+      const response = await this.axiosInstance.post('/survival-data/fetch', survivalRequest);
+      const survivalData = response.data;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Survival data for study ${studyId} (${attributeIdPrefix}):\n\n${survivalData
+              .slice(0, 20)
+              .map((item: any) => 
+                `• Patient ${item.patientId}: ${item.attrValue} (${item.attrId})`
+              )
+              .join('\n')}${survivalData.length > 20 ? '\n\n... and more survival data' : ''}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No survival data available for study ${studyId} with prefix ${attributeIdPrefix}.`,
+          },
+        ],
+      };
+    }
+  }
+
+  private async getTreatmentData(args: any) {
+    const { studyId, level = 'PATIENT', tier = 'Agent' } = args;
+    
+    try {
+      const studyViewFilter = {
+        studyIds: [studyId]
+      };
+
+      const endpoint = level === 'PATIENT' ? '/treatments/patient' : '/treatments/sample';
+      const response = await this.axiosInstance.post(endpoint, studyViewFilter, {
+        params: { tier }
+      });
+      
+      const treatmentData = response.data;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Treatment data for study ${studyId} (${level} level, ${tier} tier):\n\n${treatmentData
+              .slice(0, 20)
+              .map((treatment: any) => 
+                `• **${treatment.treatment}**\n  Count: ${treatment.count} ${level.toLowerCase()}s\n  ${level === 'SAMPLE' && treatment.time ? `Time: ${treatment.time}` : ''}`
+              )
+              .join('\n\n')}${treatmentData.length > 20 ? '\n\n... and more treatments' : ''}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No treatment data available for study ${studyId} at ${level} level.`,
+          },
+        ],
+      };
+    }
   }
 
   async run() {
